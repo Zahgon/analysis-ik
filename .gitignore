@@ -12,3 +12,24 @@
 *.jar
 *.zip
 mise.toml
+### Go ###
+# Test binaries and coverage profiles
+*.test
+*.out
+
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Dependency vendor directory
+vendor/
+
+### Task harness ###
+instruction.md
+truth.md
+test.patch
+fix.patch
+golden.patch

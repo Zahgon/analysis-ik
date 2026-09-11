@@ -5,158 +5,114 @@ IK Analysis for Elasticsearch and OpenSearch
 [![Test](https://github.com/infinilabs/analysis-ik/actions/workflows/test.yml/badge.svg)](https://github.com/infinilabs/analysis-ik/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE.txt)
 
-The IK Analysis plugin integrates Lucene IK analyzer, and support customized dictionary.  It supports major versions of Elasticsearch and OpenSearch. Maintained and supported with ❤️ by [INFINI Labs](https://infinilabs.com).
+IK Analysis is a Chinese and CJK text analyzer with a customizable dictionary. Maintained and supported with ❤️ by [INFINI Labs](https://infinilabs.com).
 
-The plugin comprises analyzer: `ik_smart` , `ik_max_word`, and tokenizer: `ik_smart` , `ik_max_word`
+It comprises analyzer: `ik_smart` , `ik_max_word`, and tokenizer: `ik_smart` , `ik_max_word`
 
 # How to Install
 
-### 🚀 **Get the Packaged Plugins**
+The analyzer is a Go module. Add it to your project:
 
-You can download the packaged plugins from here:  
-
-**[https://release.infinilabs.com/](https://release.infinilabs.com/)**
-
----
-
-### 🛠️ **Install via CLI**
-
-Alternatively, you can use the `plugin` CLI to install the plugin. Here's how:
-
-#### For Elasticsearch:
 ```bash
-bin/elasticsearch-plugin install https://get.infini.cloud/elasticsearch/analysis-ik/9.1.4
+go get github.com/infinilabs/analysis-ik
 ```
 
-#### For OpenSearch:
-```bash
-bin/opensearch-plugin install https://get.infini.cloud/opensearch/analysis-ik/2.12.0
-```
+It has no dependencies outside the Go standard library. The dictionaries in
+`config/` are data files: copy them next to your application, or point the
+configuration at wherever you keep them.
 
----
-
-### ⚠️ **Tip**  
-Make sure to replace the version number with the one that matches your Elasticsearch or OpenSearch version.
+> The packaged Elasticsearch and OpenSearch plugin bundles are JVM artifacts and
+> are not produced by this repository. The analyzer names, settings and
+> segmentation behaviour they exposed are all reproduced here.
 
 # Getting Started
 
-1.create a index
+Tokenize some text with `ik_smart`:
 
-```bash
-curl -XPUT http://localhost:9200/index
-```
+```go
+package main
 
-2.create a mapping
+import (
+	"fmt"
+	"os"
+	"path/filepath"
 
-```bash
-curl -XPOST http://localhost:9200/index/_mapping -H 'Content-Type:application/json' -d'
-{
-        "properties": {
-            "content": {
-                "type": "text",
-                "analyzer": "ik_max_word",
-                "search_analyzer": "ik_smart"
-            }
-        }
+	"github.com/infinilabs/analysis-ik/cfg"
+	"github.com/infinilabs/analysis-ik/dic"
+	"github.com/infinilabs/analysis-ik/lucene"
+)
 
-}'
-```
-
-3.index some docs
-
-```bash
-curl -XPOST http://localhost:9200/index/_create/1 -H 'Content-Type:application/json' -d'
-{"content":"美国留给伊拉克的是个烂摊子吗"}
-'
-```
-
-```bash
-curl -XPOST http://localhost:9200/index/_create/2 -H 'Content-Type:application/json' -d'
-{"content":"公安部：各地校车将享最高路权"}
-'
-```
-
-```bash
-curl -XPOST http://localhost:9200/index/_create/3 -H 'Content-Type:application/json' -d'
-{"content":"中韩渔警冲突调查：韩警平均每天扣1艘中国渔船"}
-'
-```
-
-```bash
-curl -XPOST http://localhost:9200/index/_create/4 -H 'Content-Type:application/json' -d'
-{"content":"中国驻洛杉矶领事馆遭亚裔男子枪击 嫌犯已自首"}
-'
-```
-
-4.query with highlighting
-
-```bash
-curl -XPOST http://localhost:9200/index/_search  -H 'Content-Type:application/json' -d'
-{
-    "query" : { "match" : { "content" : "中国" }},
-    "highlight" : {
-        "pre_tags" : ["<tag1>", "<tag2>"],
-        "post_tags" : ["</tag1>", "</tag2>"],
-        "fields" : {
-            "content" : {}
-        }
-    }
+type configuration struct {
+	cfg.Settings
+	dir string
 }
-'
+
+func (c *configuration) ConfDir() string           { return c.dir }
+func (c *configuration) ConfigInPluginDir() string { return c.dir }
+func (c *configuration) Path(first string, more ...string) string {
+	return filepath.Join(append([]string{first}, more...)...)
+}
+func (c *configuration) SetUseSmart(useSmart bool) cfg.Configuration {
+	c.SetUseSmartFlag(useSmart)
+	return c
+}
+func (c *configuration) SetEnableLowercase(enableLowercase bool) cfg.Configuration {
+	c.SetEnableLowercaseFlag(enableLowercase)
+	return c
+}
+
+func main() {
+	conf := &configuration{Settings: cfg.NewSettings(), dir: "config"}
+	conf.SetUseSmart(true) // ik_smart; false selects ik_max_word
+	dic.Initial(conf)
+
+	analyzer := lucene.NewIKAnalyzer(conf)
+	defer analyzer.Close()
+
+	stream := analyzer.TokenStream("content", "中华人民共和国国歌")
+	if err := stream.Reset(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return
+	}
+	for {
+		more, err := stream.IncrementToken()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		if !more {
+			break
+		}
+		fmt.Printf("%s\t[%d,%d)\t%s\n",
+			stream.CharTermAttribute(),
+			stream.OffsetAttribute().StartOffset(),
+			stream.OffsetAttribute().EndOffset(),
+			stream.TypeAttribute().Type())
+	}
+	if err := stream.End(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+}
 ```
 
-Result
+```
+中华人民共和国	[0,7)	CN_WORD
+国歌	[7,9)	CN_WORD
+```
 
-```json
-{
-    "took": 14,
-    "timed_out": false,
-    "_shards": {
-        "total": 5,
-        "successful": 5,
-        "failed": 0
-    },
-    "hits": {
-        "total": 2,
-        "max_score": 2,
-        "hits": [
-            {
-                "_index": "index",
-                "_type": "fulltext",
-                "_id": "4",
-                "_score": 2,
-                "_source": {
-                    "content": "中国驻洛杉矶领事馆遭亚裔男子枪击 嫌犯已自首"
-                },
-                "highlight": {
-                    "content": [
-                        "<tag1>中国</tag1>驻洛杉矶领事馆遭亚裔男子枪击 嫌犯已自首 "
-                    ]
-                }
-            },
-            {
-                "_index": "index",
-                "_type": "fulltext",
-                "_id": "3",
-                "_score": 2,
-                "_source": {
-                    "content": "中韩渔警冲突调查：韩警平均每天扣1艘中国渔船"
-                },
-                "highlight": {
-                    "content": [
-                        "均每天扣1艘<tag1>中国</tag1>渔船 "
-                    ]
-                }
-            }
-        ]
-    }
-}
+# How to Build and Test
+
+```bash
+go build ./...
+go vet ./...
+go test ./...
 ```
 
 # Dictionary Configuration
 
-Config file `IKAnalyzer.cfg.xml` can be located at `{conf}/analysis-ik/IKAnalyzer.cfg.xml`
-or `{plugins}/elasticsearch-analysis-ik-*/config/IKAnalyzer.cfg.xml`
+Config file `IKAnalyzer.cfg.xml` is read from the configuration directory the
+`Configuration` reports, falling back to the `config` directory beside the
+executable.
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -184,7 +140,7 @@ Among which `location` refers to a URL, such as `http://yoursite.com/getCustomDi
 
 2. The content format returned by the HTTP request is one word per line, and the newline character is represented by `\n`.
 
-Meeting the above two requirements can achieve hot word updates without the need to restart the ES instance.
+Meeting the above two requirements can achieve hot word updates without the need to restart the application.
 
 You can place the hot words that need to be automatically updated in a .txt file encoded in UTF-8. Place it under nginx or another simple HTTP server. When the .txt file is modified, the HTTP server will automatically return the corresponding Last-Modified and ETag when the client requests the file. You can also create a separate tool to extract relevant vocabulary from the business system and update this .txt file.
 
